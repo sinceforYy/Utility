@@ -87,9 +87,11 @@ class SyncDataModuleTemplate[T <: Data](
   numWrite: Int,
   parentModule: String = "",
   concatData: Boolean = false,
-  perReadPortBypassEnable: Option[Seq[Boolean]] = None
+  perReadPortBypassEnable: Option[Seq[Boolean]] = None,
+  hasRen: Boolean = false,
 ) extends Module {
   val io = IO(new Bundle {
+    val ren   = if (hasRen) Some(Vec(numRead, Input(Bool()))) else None
     val raddr = Vec(numRead,  Input(UInt(log2Ceil(numEntries).W)))
     val rdata = Vec(numRead,  Output(gen))
     val wen   = Vec(numWrite, Input(Bool()))
@@ -120,8 +122,10 @@ class SyncDataModuleTemplate[T <: Data](
     val dataBank = Module(new NegedgeDataModuleTemplate(dataType, bankEntries, numRead, numWrite, parentModule, perReadPortBypassEnable))
 
     // delay one clock
-    val raddr_dup = RegNext(io.raddr)
-    val wen_dup = RegNext(io.wen)
+    val raddr_dup = if (hasRen) {
+      (io.ren.get zip io.raddr).map{ case (ren, raddr) => RegEnable(raddr, ren) }
+    } else RegNext(io.raddr)
+    val wen_dup = io.wen.map(en => GatedValidRegNext(en))
     val waddr_dup = io.wen.zip(io.waddr).map(w => RegEnable(w._2, w._1))
 
     // input
@@ -142,7 +146,9 @@ class SyncDataModuleTemplate[T <: Data](
   // output
   val rdata = if (concatData) dataBanks.map(_.io.rdata.map(_.asTypeOf(gen))) else dataBanks.map(_.io.rdata)
   for (j <- 0 until numRead) {
-    val raddr_dup = RegNext(io.raddr(j))
+    val raddr_dup = if(hasRen) {
+      RegEnable(io.raddr(j), io.ren.get(j))
+    } else RegNext(io.raddr(j))
     val index_dec = UIntToOH(bankIndex(raddr_dup), numBanks)
     io.rdata(j) := Mux1H(index_dec, rdata.map(_(j)))
   }
